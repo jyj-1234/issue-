@@ -28,8 +28,12 @@ pnpm dev
 ## 빌드
 
 ```bash
-pnpm run build
+npm run build
 ```
+
+## Vercel 배포
+
+GitHub 저장소를 Vercel에 Import하면 `vercel.json`의 빌드 설정을 사용합니다. `api/` 폴더의 검색·문서 분석·내보내기 함수는 Node.js Serverless Function으로 배포됩니다. API 키는 배포 환경변수에 넣지 않고 브라우저에서 입력합니다.
 
 ## 구조
 
@@ -38,3 +42,4 @@ pnpm run build
 - `server/api/template.mjs`: kordoc 문서 양식 분석 Route Handler
 - `server/api/export.mjs`: DOCX·HWPX 생성 Route Handler
 - `server/index.mjs`: Node.js 서버 및 Vite 개발 서버
+- `api/`: Vercel Serverless Function 진입점
