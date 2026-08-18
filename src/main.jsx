@@ -1,8 +1,10 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ArrowUpRight, Check, Clipboard, FileText, KeyRound, LayoutDashboard, RefreshCw, Save, Settings2, Sparkles, Trash2 } from 'lucide-react'
 import { analyzeTemplate, downloadReport, searchReports } from './services/reportService'
+import { loadSavedReports, openReportInNewTab, saveReport } from './services/reportStore'
 import './styles.css'
+import './reportFeatures.css'
 
 const initialSources = ['정부·공공기관', '연구·학술', '뉴스', '기업', '국제기구']
 const reportTypes = [{ value: '보고용 1장 페이퍼', description: '핵심만 빠르게 공유하는 의사결정용 1페이지 보고서', badge: '빠른 보고' }, { value: '현황-문제점-대응방향', description: '상황을 진단하고 실행 과제까지 정리하는 분석 보고서', badge: '분석형' }]
@@ -34,6 +36,8 @@ function App() {
   const [downloadStatus, setDownloadStatus] = useState('idle')
   const [providers, setProviders] = useState(['openai', 'gemini'])
   const [maxSources, setMaxSources] = useState(20)
+  const [savedReports, setSavedReports] = useState(() => loadSavedReports())
+  const [saveState, setSaveState] = useState('idle')
 
   const toggleSource = (source) => setSources((current) => current.includes(source) ? current.filter((item) => item !== source) : [...current, source])
   const toggleProvider = (provider) => setProviders((current) => current.includes(provider) ? current.filter((item) => item !== provider) : [...current, provider])
@@ -61,10 +65,54 @@ function App() {
   const qualityChecks = [{ label: '핵심 요약 포함', pass: /핵심 요약|요약/i.test(combinedText) }, { label: `${requiredSections.join('·')} 포함`, pass: requiredSections.every((word) => combinedText.includes(word)) }, { label: '근거 인용 포함', pass: references.length > 0 && /\[\d+\]/.test(combinedText) }, { label: '참고할 수 있는 충분한 내용', pass: combinedText.length >= 300 }]
   const templateMatches = (template?.outline || []).map((item) => { const key = item.replace(/^\s*[\d.\-가-힣)]+\s*/, '').slice(0, 30); return { item, pass: key.length > 1 && combinedText.includes(key) } })
   const handleDownload = async (format) => { if (!combinedText) return setError('먼저 성공한 검색 결과를 생성해 주세요.'); setDownloadStatus(format); try { await downloadReport({ format, markdown: combinedText, title: input.trim().slice(0, 40) || 'reportly-report' }) } catch (caught) { setError(caught.message) } finally { setDownloadStatus('idle') } }
+  const currentReport = { title: input.trim().slice(0, 60) || '이슈 대응 보고서', input, reportType, period, sources, combinedText, references }
+  const handleSaveReport = () => { if (!combinedText) return setError('먼저 성공한 검색 결과를 생성해 주세요.'); try { const saved = saveReport(currentReport); setSavedReports((current) => [saved, ...current].slice(0, 30)); setSaveState('saved'); setTimeout(() => setSaveState('idle'), 2200) } catch { setError('보고서를 브라우저에 저장하지 못했습니다.') } }
+  const handleOpenNewTab = (report = currentReport) => { if (!report.combinedText) return setError('먼저 성공한 검색 결과를 생성해 주세요.'); try { openReportInNewTab(report) } catch (caught) { setError(caught.message) } }
+  useEffect(() => { if (status !== 'success') setSaveState('idle') }, [status])
+  useEffect(() => {
+    const resultPanel = document.querySelector('.result-panel')
+    const workspace = resultPanel?.parentElement
+    if (!resultPanel || !workspace) return undefined
+    document.querySelectorAll('.reportly-extra-actions, .reportly-saved-panel').forEach((node) => node.remove())
+    if (status === 'success') {
+      const actions = document.createElement('div')
+      actions.className = 'reportly-extra-actions'
+      const saveButton = document.createElement('button')
+      saveButton.className = 'secondary-button'
+      saveButton.textContent = saveState === 'saved' ? '✓ 저장됨' : '보고서 저장'
+      saveButton.addEventListener('click', handleSaveReport)
+      const tabButton = document.createElement('button')
+      tabButton.className = 'secondary-button'
+      tabButton.textContent = '새 탭에서 확인'
+      tabButton.addEventListener('click', () => handleOpenNewTab())
+      actions.append(saveButton, tabButton)
+      resultPanel.append(actions)
+    }
+    if (savedReports.length > 0) {
+      const savedPanel = document.createElement('section')
+      savedPanel.className = 'panel reportly-saved-panel'
+      savedPanel.id = 'saved-reports'
+      savedPanel.innerHTML = '<div class="saved-header"><div><span class="step">03</span><h2>내 보고서</h2></div><span class="saved-note">현재 브라우저에만 저장 · 추후 Supabase 연동 예정</span></div>'
+      const list = document.createElement('div')
+      list.className = 'saved-list'
+      savedReports.slice(0, 6).forEach((report) => {
+        const item = document.createElement('button')
+        item.className = 'saved-report-card'
+        item.innerHTML = `<span class="saved-report-title"></span><span class="saved-report-meta"></span><span aria-hidden="true">↗</span>`
+        item.querySelector('.saved-report-title').textContent = report.title
+        item.querySelector('.saved-report-meta').textContent = `${report.reportType} · ${new Date(report.savedAt).toLocaleString('ko-KR')}`
+        item.addEventListener('click', () => handleOpenNewTab(report))
+        list.append(item)
+      })
+      savedPanel.append(list)
+      workspace.after(savedPanel)
+    }
+    return () => document.querySelectorAll('.reportly-extra-actions, .reportly-saved-panel').forEach((node) => node.remove())
+  }, [status, saveState, savedReports])
   const renderProviderResult = (provider, label) => { const result = results[provider]; return <article className="provider-result"><div className="provider-heading"><div><span className="provider-dot" />{label}</div>{result.ok === true && <button className="copy-button" onClick={() => handleCopy(provider)}>{copied === provider ? <Check size={14} /> : <Clipboard size={14} />}{copied === provider ? '복사됨' : '결과 복사'}</button>}</div>{result.ok === false ? <div className="provider-error"><strong>{result.error?.code === 'NO_API_KEY' ? 'API 키가 없습니다' : '검색에 실패했습니다'}</strong><p>{result.error?.message}</p></div> : <><div className={`report-text ${result.ok === null ? 'placeholder' : ''}`}>{result.text}</div>{result.ok === true && result.sources?.length > 0 && <div className="provider-sources"><strong>검색 출처 {result.sources.length}개</strong>{result.sources.map((source, index) => <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${index}`}>[{source.number}] {source.title}</a>)}</div>}</>}</article> }
 
   return <div className="app-shell">
-    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Sparkles size={17} /></div><span>Reportly</span></div><nav><a className="active"><LayoutDashboard size={17} />새 보고서</a><a><FileText size={17} />내 보고서</a></nav><div className="sidebar-bottom"><a><Settings2 size={17} />설정</a><div className="user"><div className="avatar">김</div><div><strong>김정책</strong><small>정책기획팀</small></div><ArrowUpRight size={14} /></div></div></aside>
+    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Sparkles size={17} /></div><span>Reportly</span></div><nav><a className="active"><LayoutDashboard size={17} />새 보고서</a><a href="#saved-reports" onClick={(event) => { event.preventDefault(); document.getElementById('saved-reports')?.scrollIntoView({ behavior: 'smooth' }) }}><FileText size={17} />내 보고서 {savedReports.length > 0 && <small className="saved-count">{savedReports.length}</small>}</a></nav><div className="sidebar-bottom"><a><Settings2 size={17} />설정</a><div className="user"><div className="avatar">김</div><div><strong>김정책</strong><small>정책기획팀</small></div><ArrowUpRight size={14} /></div></div></aside>
     <main className="main-content"><header className="topbar"><div><p className="eyebrow">WORKSPACE / NEW REPORT</p><h1>새 보고서 만들기</h1></div><button className="icon-button" aria-label="입력·결과 리셋" onClick={handleReset}><RefreshCw size={18} /></button></header>
       <section className="panel api-panel"><div className="api-heading"><div className="api-title"><KeyRound size={17} /><div><h2>API 연결 설정</h2><p>키는 이 브라우저 탭의 세션에만 보관됩니다.</p></div></div><span className={`key-status ${keySaveState}`}>{keySaveState === 'saved' ? '세션에 저장됨' : keySaveState === 'unsaved' ? '저장되지 않은 변경' : '키 미설정'}</span></div><div className="api-fields"><div className="api-field"><label className="field-label" htmlFor="openai-key">OpenAI API 키</label><input id="openai-key" className="key-input" type="password" value={openaiKey} onChange={(event) => handleKeyChange('openai', event.target.value)} placeholder="sk-..." autoComplete="off" /></div><div className="api-field"><label className="field-label" htmlFor="gemini-key">Gemini API 키</label><input id="gemini-key" className="key-input" type="password" value={geminiKey} onChange={(event) => handleKeyChange('gemini', event.target.value)} placeholder="AIza..." autoComplete="off" /></div></div><div className="provider-options"><div><span className="field-label">사용할 검색 API</span><div className="provider-checks"><label className="check-item"><input type="checkbox" checked={providers.includes('openai')} onChange={() => toggleProvider('openai')} /><span className="checkmark">✓</span>OpenAI Web Search</label><label className="check-item"><input type="checkbox" checked={providers.includes('gemini')} onChange={() => toggleProvider('gemini')} /><span className="checkmark">✓</span>Gemini Google Search</label></div></div><label className="source-limit"><span className="field-label">최대 출처 수</span><select value={maxSources} onChange={(event) => setMaxSources(Number(event.target.value))}><option value="5">5개</option><option value="10">10개</option><option value="15">15개</option><option value="20">20개</option></select></label></div><p className="session-note">세션 비우기를 누르거나 브라우저 탭을 닫으면 저장된 API 키가 삭제됩니다. 서버 로그와 보고서 결과에는 API 키가 표시되지 않습니다.</p><div className="api-actions"><button className="secondary-button" onClick={handleReset}><RefreshCw size={14} />입력·결과 리셋</button><button className="secondary-button primary-outline" onClick={handleSaveSession}><Save size={14} />세션 저장</button><button className="secondary-button danger-outline" onClick={handleClearSession}><Trash2 size={14} />세션 비우기</button></div></section>
       <section className="panel template-panel"><div className="template-heading"><div className="api-title"><FileText size={17} /><div><h2>보고서 양식 분석</h2><p>HWP·HWPX·DOCX·PDF·XLS·XLSX 형식의 기존 양식을 분석해 생성 프롬프트에 반영합니다.</p></div></div><span className={`key-status ${templateStatus === 'success' ? 'saved' : templateStatus === 'error' ? 'unsaved' : 'empty'}`}>{templateStatus === 'success' ? '분석 완료' : templateStatus === 'error' ? '분석 실패' : '선택 사항'}</span></div><div className="template-upload-row"><input id="template-file" type="file" accept=".hwp,.hwpx,.docx,.pdf,.xlsx,.xls" onChange={(event) => { setTemplateFile(event.target.files?.[0] || null); setTemplate(null); setTemplateStatus('idle'); setError('') }} /><label htmlFor="template-file" className="file-picker"><FileText size={15} />{templateFile ? templateFile.name : '문서 양식 선택'}</label><button className="secondary-button primary-outline" onClick={handleTemplateAnalyze} disabled={templateStatus === 'loading'}>{templateStatus === 'loading' ? <><span className="spinner" />분석 중...</> : '양식 분석'}</button></div>{templateStatus === 'success' && <><p className="template-success">{template.fileName} · {template.fileType} · 제목과 항목 순서를 추출했습니다.</p><button className="preview-toggle" onClick={() => setTemplatePreviewOpen((open) => !open)}>{templatePreviewOpen ? '분석 결과 접기' : '분석 결과 미리보기'}</button>{templatePreviewOpen && <div className="template-preview"><strong>추출된 항목</strong><div className="template-outline">{template.outline?.length ? template.outline.map((item, index) => <span key={`${item}-${index}`}>{index + 1}. {item}</span>) : '구조화된 항목을 찾지 못했습니다.'}</div><strong>Markdown 원문</strong><pre>{template.markdown}</pre></div>}</>}{templateStatus === 'error' && <p className="form-error template-error" role="alert">{template.fileName}: {template.error}</p>}</section>
